@@ -1,0 +1,271 @@
+// ============================================================
+// SMART ZONE — Prisma Schema
+// PostgreSQL
+// ملحوظة: جدول Teachers متعمد إنه يتأجل (هيتضاف لاحقًا حسب الطلب)
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------
+// Users (الطلاب)
+// ---------------------------------------------
+model User {
+  id            String    @id @default(uuid())
+  name          String
+  track         String    // الشعبة: علمي علوم / علمي رياضة / أدبي ... إلخ
+  phone         String?   @unique
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  subscriptionStartAt  DateTime?
+  subscriptionEndAt    DateTime?
+  subscriptionStatus   SubscriptionStatus @default(INACTIVE)
+
+  isLocked      Boolean   @default(false)
+  lockedAt      DateTime?
+  tamperCount   Int       @default(0)
+
+  activationCodes ActivationCode[]
+  devices         Device[]
+  supportTickets  SupportTicket[]
+  logs            Log[]
+  notifications   Notification[]
+  deviceChangeRequests DeviceChangeRequest[]
+
+  @@index([subscriptionStatus])
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  INACTIVE
+  TRIAL
+}
+
+// ---------------------------------------------
+// Admin
+// ---------------------------------------------
+model Admin {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         AdminRole @default(ADMIN)
+  createdAt    DateTime @default(now())
+  lastLoginAt  DateTime?
+
+  logs         Log[]
+  notifications Notification[] @relation("AdminNotifications")
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  ADMIN
+  SUPPORT
+}
+
+// ---------------------------------------------
+// Activation Codes
+// كود من 9 أرقام، بيتخزن Hash فقط، يستخدم مرة واحدة
+// ---------------------------------------------
+model ActivationCode {
+  id          String     @id @default(uuid())
+  codeHash    String     @unique   // SHA-256 / bcrypt hash للكود، مش الكود نفسه
+  status      CodeStatus @default(UNUSED)
+
+  userId      String?
+  user        User?      @relation(fields: [userId], references: [id])
+
+  deviceId    String?
+  device      Device?    @relation(fields: [deviceId], references: [id])
+
+  createdAt   DateTime   @default(now())
+  usedAt      DateTime?
+  expiresAt   DateTime?
+
+  disabledReason String?  // في حالة تعطيل الكود بسبب عبث أو قرار أدمن
+
+  @@index([status])
+}
+
+enum CodeStatus {
+  UNUSED
+  USED
+  DISABLED
+}
+
+// ---------------------------------------------
+// Devices (ربط الجهاز)
+// ---------------------------------------------
+model Device {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+
+  fingerprint   String   // hash لبصمة الجهاز (user-agent + خصائص تانية)
+  isPrimary     Boolean  @default(false)
+  firstSeenAt   DateTime @default(now())
+  lastSeenAt    DateTime @default(now())
+
+  activationCodes ActivationCode[]
+  changeRequests  DeviceChangeRequest[]
+
+  @@unique([userId, fingerprint])
+}
+
+// طلب تغيير الجهاز — لازم موافقة أدمن
+model DeviceChangeRequest {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+
+  oldDeviceId String?
+  oldDevice   Device?   @relation(fields: [oldDeviceId], references: [id])
+
+  newFingerprint String
+  status      RequestStatus @default(PENDING)
+  createdAt   DateTime  @default(now())
+  resolvedAt  DateTime?
+  resolvedByAdminId String?
+
+  @@index([status])
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ---------------------------------------------
+// Support Tickets (الدعم داخل الموقع)
+// ---------------------------------------------
+model SupportTicket {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+
+  subject     String
+  status      TicketStatus @default(OPEN)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  messages    SupportMessage[]
+}
+
+enum TicketStatus {
+  OPEN
+  ANSWERED
+  CLOSED
+}
+
+model SupportMessage {
+  id         String   @id @default(uuid())
+  ticketId   String
+  ticket     SupportTicket @relation(fields: [ticketId], references: [id])
+
+  senderType SenderType
+  body       String
+  imageUrl   String?     // لصورة إثبات التحويل مثلاً
+  createdAt  DateTime  @default(now())
+}
+
+enum SenderType {
+  USER
+  ADMIN
+}
+
+// ---------------------------------------------
+// FAQ (الدعم الذكي)
+// ---------------------------------------------
+model FAQ {
+  id        String   @id @default(uuid())
+  question  String
+  answer    String
+  order     Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------
+// Subjects (صفحة المواد)
+// ---------------------------------------------
+model Subject {
+  id          String   @id @default(uuid())
+  title       String
+  imageUrl    String
+  track       String   // مرتبطة بشعبة معينة
+  order       Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ---------------------------------------------
+// Logs (سجل العمليات)
+// ---------------------------------------------
+model Log {
+  id        String   @id @default(uuid())
+  type      LogType
+  message   String
+  meta      Json?
+
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+
+  adminId   String?
+  admin     Admin?   @relation(fields: [adminId], references: [id])
+
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([type])
+  @@index([createdAt])
+}
+
+enum LogType {
+  LOGIN
+  LOGOUT
+  CODE_CREATED
+  CODE_ACTIVATED
+  DEVICE_CHANGED
+  DEVICE_CHANGE_REQUESTED
+  TAMPER_ATTEMPT
+  SUPPORT_MESSAGE
+  USER_UPDATED
+  SUBSCRIPTION_EXPIRED
+  USER_CREATED
+}
+
+// ---------------------------------------------
+// Notifications (لوحة الإشعارات بتاعة الأدمن)
+// ---------------------------------------------
+model Notification {
+  id         String   @id @default(uuid())
+  type       LogType
+  title      String
+  body       String
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+
+  adminId    String?
+  admin      Admin?   @relation("AdminNotifications", fields: [adminId], references: [id])
+
+  @@index([isRead])
+}
+
+// ---------------------------------------------
+// ملحوظة: Teachers هيتم إضافته في مرحلة لاحقة حسب الطلب
+// ---------------------------------------------
